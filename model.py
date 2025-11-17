@@ -24,7 +24,8 @@ class DiGemo(nn.Module):
         if n_classes_emo == 6 or n_classes_emo == 4:
             self.n_speakers = 2
         if n_classes_emo == 7:
-            pass 
+            self.n_speakers = 9
+
         self.speaker_embeddings = nn.Embedding(self.n_speakers + 1, args.hidden_dim, padding_idx=self.n_speakers)
 
         self.enhance_t = DABE(
