@@ -62,9 +62,9 @@ class DiGemo(nn.Module):
         )
 
         # Heter graph
-        self.graph_tv = CrossModalGraph(args.hidden_dim, args.heter_n_layers[0], args.no_cuda)
-        self.graph_ta = CrossModalGraph(args.hidden_dim, args.heter_n_layers[1], args.no_cuda)
-        self.graph_va = CrossModalGraph(args.hidden_dim, args.heter_n_layers[2], args.no_cuda)
+        self.graph_tv = CrossModalGraph(args.hidden_dim, args.heter_n_layers[0], args.no_cuda, args.no_dot)
+        self.graph_ta = CrossModalGraph(args.hidden_dim, args.heter_n_layers[1], args.no_cuda, args.no_dot)
+        self.graph_va = CrossModalGraph(args.hidden_dim, args.heter_n_layers[2], args.no_cuda, args.no_dot)
 
         # residual module
         self.residual_t = nn.Sequential(

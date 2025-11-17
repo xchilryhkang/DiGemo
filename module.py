@@ -178,15 +178,19 @@ class EdgeWeightGen(nn.Module):
 
 class CrossModalGraphLayer(nn.Module):
     
-    def __init__(self, in_features, out_features):
+    def __init__(self, in_features, out_features, no_dot=False):
         super().__init__()
         self.W1 = nn.Linear(in_features, out_features, bias=False)
         self.W2 = nn.Linear(2 * out_features, out_features, bias=False)
+        self.no_dot = no_dot
 
     def forward(self, input, adj):
         proj_input = self.W1(input)
-        neighboor = torch.spmm(adj, proj_input) 
-        updated_feature = F.leaky_relu(self.W2(torch.cat([input + neighboor, input * neighboor], dim=-1)))
+        neighboor = torch.spmm(adj, proj_input)
+        if not self.no_dot: 
+            updated_feature = F.leaky_relu(self.W2(torch.cat([input + neighboor, input * neighboor], dim=-1)))
+        else:
+            updated_feature = F.leaky_relu(input + neighboor)
         return updated_feature
 
 

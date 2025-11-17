@@ -82,6 +82,8 @@ parser.add_argument("--no_gated_fusion", action="store_true", default=False, hel
 
 parser.add_argument("--no_residual", action="store_true", default=False, help="does not use residual graph")
 
+parser.add_argument("--no_dot", action="store_true", default=False, help="does not use the multiplication conv operation")
+
 args = parser.parse_args()
 
 os.environ["MASTER_ADDR"] = "localhost"
