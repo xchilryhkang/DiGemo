@@ -196,7 +196,7 @@ class CrossModalGraphLayer(nn.Module):
 
 class CrossModalGraph(nn.Module):
 
-    def __init__(self, hidden_dim, num_layers, no_cuda):
+    def __init__(self, hidden_dim, num_layers, no_cuda, no_dot):
         super().__init__()
         self.num_layers = num_layers
         self.no_cuda = no_cuda
@@ -204,7 +204,7 @@ class CrossModalGraph(nn.Module):
         self.edge_weight_gen = EdgeWeightGen(hidden_dim=hidden_dim, shared_dim=hidden_dim // 4)
 
         self.graph_layers = nn.ModuleList([
-            CrossModalGraphLayer(hidden_dim, hidden_dim)
+            CrossModalGraphLayer(hidden_dim, hidden_dim, no_dot)
             for _ in range(num_layers)
         ])
 
