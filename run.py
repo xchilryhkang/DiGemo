@@ -78,7 +78,7 @@ parser.add_argument("--no_intra", action="store_true", default=False, help="does
 
 parser.add_argument("--no_residual_graph", action="store_true", default=False, help="does not use residual into graph")
 
-parser.add_argument("--no_gated_fusion", action="store_true", default=False, help="does not use gated fusion")
+parser.add_argument("--fusion_method", default="gated", help="fusion method: gated/concat/add")
 
 parser.add_argument("--no_residual", action="store_true", default=False, help="does not use residual graph")
 

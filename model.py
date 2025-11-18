@@ -12,7 +12,7 @@ class DiGemo(nn.Module):
         self.win_p = args.win[0]
         self.win_f = args.win[1]
         self.modals = args.modals
-        self.no_gated_fusion = args.no_gated_fusion
+        self.fusion_method = args.fusion_method
         self.no_residual = args.no_residual
 
         # Conv layers
@@ -82,7 +82,10 @@ class DiGemo(nn.Module):
             nn.Dropout(args.dropout_2)
         )
 
-        self.gated_fusion = GatedFusion(args.hidden_dim)
+        if self.fusion_method == 'gated':
+            self.gated_fusion = GatedFusion(args.hidden_dim)
+        elif self.fusion_method == 'concat':
+            self.reduce_cat = nn.Linear(3 * args.hidden_dim, args.hidden_dim, bias=False)
 
         # Cls Layers
         self.t_cls_layer = nn.Linear(args.hidden_dim, n_classes_emo)
@@ -196,11 +199,13 @@ class DiGemo(nn.Module):
                 t_graph_out = None
                 h_list = [v_graph_out, a_graph_out]
 
-        if not self.no_gated_fusion:  
+        if self.fusion_method == 'gated':
             fused_feature = self.gated_fusion(h_list)
-        else: 
+        elif self.fusion_method == 'add':
             fused_feature = torch.sum(torch.stack(h_list), dim=0) / len(h_list)
-
+        elif self.fusion_method == 'concat':
+            fused_feature = self.reduce_cat(torch.cat(h_list, dim=-1))
+        
         # Cls
         t_logit, v_logit, a_logit = None, None, None
         if t_graph_out is not None:
