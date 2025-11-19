@@ -4,3 +4,4 @@ scikit_learn==1.6.1
 torch==2.0.0
 tensorboardX==2.6.2.2
 matplotlib==3.7.1
+seaborn==0.12.2
