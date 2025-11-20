@@ -22,6 +22,7 @@ def plot_tsne(features, labels, dataset, file_name, save_dir='results/tnse'):
         plt.scatter(reduced[idx, 0], reduced[idx, 1], label=label_name, s=10, alpha=0.7)
 
     plt.legend()
+    plt.title(f'{dataset} Dataset - t-SNE Visualization', fontsize=14, fontweight='bold', y=1.03)
     plt.tight_layout()
 
     save_path = os.path.join(save_dir, f'{file_name}.pdf')
