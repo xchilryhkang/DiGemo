@@ -51,11 +51,17 @@ def train_or_eval_model(
 
         textf, visuf, acouf, qmask, umask, label_emotion = ([d.cuda() for d in data[:-1]] if cuda else data[:-1])
 
-        dia_lengths, label_emotions = [], [] 
+        dia_lengths, label_emotions, initial_cats = [], [], [] 
         for j in range(umask.size(1)):
             dia_lengths.append((umask[:, j] == 1).nonzero().tolist()[-1][0] + 1)
             label_emotions.append(label_emotion[:dia_lengths[j], j])
+            initial_cats.append(torch.cat([
+                textf[:dia_lengths[j], j, :],
+                visuf[:dia_lengths[j], j, :],
+                acouf[:dia_lengths[j], j, :]
+            ], dim=-1))
         label_emo = torch.cat(label_emotions)
+        initial_feat = torch.cat(initial_cats)
 
         fused_logit, t_logit, v_logit, a_logit, fused_feature = model(textf, visuf, acouf, umask, qmask, dia_lengths)
 
@@ -98,6 +104,7 @@ def train_or_eval_model(
 
         preds_emo.append(torch.argmax(fused_prob, 1).cpu().numpy())
         labels_emo.append(label_emo.cpu().numpy())
+        initial_feats.append(initial_feat.cpu().numpy())
         losses.append(loss.item())
 
         if train:
@@ -109,10 +116,13 @@ def train_or_eval_model(
     if preds_emo != []:
         preds_emo = np.concatenate(preds_emo)
         labels_emo = np.concatenate(labels_emo)
+        initial_feats = np.concatenate(initial_feats)
         fused_features = np.concatenate(fused_features)
 
     vids += data[-1]
     labels_emo = np.array(labels_emo)
+    initial_feats = np.array(initial_feats)
+    fused_features = np.array(fused_features)
     preds_emo = np.array(preds_emo)
     vids = np.array(vids)
 

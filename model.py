@@ -14,11 +14,16 @@ class DiGemo(nn.Module):
         self.modals = args.modals
         self.fusion_method = args.fusion_method
         self.no_residual = args.no_residual
+        self.no_graph = args.no_graph
 
-        # Conv layers
-        self.conv_t = nn.Conv1d(embedding_dims[0], args.hidden_dim, kernel_size=1, padding=0, bias=False) 
-        self.conv_v = nn.Conv1d(embedding_dims[1], args.hidden_dim, kernel_size=1, padding=0, bias=False)
-        self.conv_a = nn.Conv1d(embedding_dims[2], args.hidden_dim, kernel_size=1, padding=0, bias=False)
+        # # Conv layers
+        # self.conv_t = nn.Conv1d(embedding_dims[0], args.hidden_dim, kernel_size=1, padding=0, bias=False) 
+        # self.conv_v = nn.Conv1d(embedding_dims[1], args.hidden_dim, kernel_size=1, padding=0, bias=False)
+        # self.conv_a = nn.Conv1d(embedding_dims[2], args.hidden_dim, kernel_size=1, padding=0, bias=False)
+
+        self.proj_t = nn.Linear(embedding_dims[0], args.hidden_dim, bias=False)
+        self.proj_v = nn.Linear(embedding_dims[1], args.hidden_dim, bias=False)
+        self.proj_a = nn.Linear(embedding_dims[2], args.hidden_dim, bias=False)
 
         # speaker embedding
         if n_classes_emo == 6 or n_classes_emo == 4:
@@ -101,13 +106,20 @@ class DiGemo(nn.Module):
         qmask: (L, B, n_speakers)
         '''
 
-        # Conv layer
+        # # Conv layer
+        # if 't' in self.modals:
+        #     feature_t = self.conv_t(feature_t.permute(1, 2, 0)).transpose(1, 2) # (B, L, D)
+        # if 'v' in self.modals:
+        #     feature_v = self.conv_v(feature_v.permute(1, 2, 0)).transpose(1, 2)
+        # if 'a' in self.modals:
+        #     feature_a = self.conv_a(feature_a.permute(1, 2, 0)).transpose(1, 2)
+
         if 't' in self.modals:
-            feature_t = self.conv_t(feature_t.permute(1, 2, 0)).transpose(1, 2) # (B, L, D)
+            feature_t = self.proj_t(feature_t.transpose(0, 1)) # (B, L, D)
         if 'v' in self.modals:
-            feature_v = self.conv_v(feature_v.permute(1, 2, 0)).transpose(1, 2)
+            feature_v = self.proj_v(feature_v.transpose(0, 1))
         if 'a' in self.modals:
-            feature_a = self.conv_a(feature_a.permute(1, 2, 0)).transpose(1, 2)
+            feature_a = self.proj_a(feature_a.transpose(0, 1))
 
         # Speaker emb
         spk_idx = torch.argmax(qmask, -1).transpose(0, 1) # (B, L)
@@ -135,69 +147,73 @@ class DiGemo(nn.Module):
         if 'a' in self.modals:
             feature_a = flatten_batch(feature_a, dia_lengths, self.no_cuda)
         
-        # Graph learning
-        edge_index = None
-        if 't' in self.modals and 'v' in self.modals:
-            (v_to_t_graph_out, t_to_v_graph_out), edge_index = self.graph_tv(
-                (feature_t, feature_v), 
-                dia_lengths,
-                self.win_p,
-                self.win_f, 
-                edge_index
-            )
-        if 't' in self.modals and 'a' in self.modals:
-            (a_to_t_graph_out, t_to_a_graph_out), edge_index = self.graph_ta(
-                (feature_t, feature_a), 
-                dia_lengths,
-                self.win_p,
-                self.win_f, 
-                edge_index
-            )
-        if 'v' in self.modals and 'a' in self.modals:
-            (a_to_v_graph_out, v_to_a_graph_out), edge_index = self.graph_va(
-                (feature_v, feature_a), 
-                dia_lengths,
-                self.win_p,
-                self.win_f, 
-                edge_index
-            )
+        if not self.no_graph:
 
-        # Residual 
-        if self.modals == 'tva':
-            t_graph_out = v_to_t_graph_out + a_to_t_graph_out  # (N, d)
-            v_graph_out = t_to_v_graph_out + a_to_v_graph_out 
-            a_graph_out = t_to_a_graph_out + v_to_a_graph_out 
-            if not self.no_residual:
-                t_graph_out += self.residual_t(feature_t)
-                v_graph_out += self.residual_v(feature_v)
-                a_graph_out += self.residual_a(feature_a)
-            h_list = [t_graph_out, v_graph_out, a_graph_out]
-        else:
+            # Graph learning
+            edge_index = None
             if 't' in self.modals and 'v' in self.modals:
-                t_graph_out = v_to_t_graph_out 
-                v_graph_out = t_to_v_graph_out 
+                (v_to_t_graph_out, t_to_v_graph_out), edge_index = self.graph_tv(
+                    (feature_t, feature_v), 
+                    dia_lengths,
+                    self.win_p,
+                    self.win_f, 
+                    edge_index
+                )
+            if 't' in self.modals and 'a' in self.modals:
+                (a_to_t_graph_out, t_to_a_graph_out), edge_index = self.graph_ta(
+                    (feature_t, feature_a), 
+                    dia_lengths,
+                    self.win_p,
+                    self.win_f, 
+                    edge_index
+                )
+            if 'v' in self.modals and 'a' in self.modals:
+                (a_to_v_graph_out, v_to_a_graph_out), edge_index = self.graph_va(
+                    (feature_v, feature_a), 
+                    dia_lengths,
+                    self.win_p,
+                    self.win_f, 
+                    edge_index
+                )
+
+            # Residual 
+            if self.modals == 'tva':
+                t_graph_out = v_to_t_graph_out + a_to_t_graph_out  # (N, d)
+                v_graph_out = t_to_v_graph_out + a_to_v_graph_out 
+                a_graph_out = t_to_a_graph_out + v_to_a_graph_out 
                 if not self.no_residual:
                     t_graph_out += self.residual_t(feature_t)
                     v_graph_out += self.residual_v(feature_v)
-                a_graph_out = None
-                h_list = [t_graph_out, v_graph_out]
-                
-            elif 't' in self.modals and 'a' in self.modals:
-                t_graph_out = a_to_t_graph_out 
-                a_graph_out = t_to_a_graph_out 
-                if not self.no_residual:
-                    t_graph_out += self.residual_t(feature_t)
                     a_graph_out += self.residual_a(feature_a)
-                v_graph_out = None
-                h_list = [t_graph_out, a_graph_out]
-            elif 'v' in self.modals and 'a' in self.modals:
-                v_graph_out = a_to_v_graph_out 
-                a_graph_out = v_to_a_graph_out 
-                if not self.no_residual:
-                    v_graph_out += self.residual_v(feature_v)
-                    a_graph_out += self.residual_a(feature_a)
-                t_graph_out = None
-                h_list = [v_graph_out, a_graph_out]
+                h_list = [t_graph_out, v_graph_out, a_graph_out]
+            else:
+                if 't' in self.modals and 'v' in self.modals:
+                    t_graph_out = v_to_t_graph_out 
+                    v_graph_out = t_to_v_graph_out 
+                    if not self.no_residual:
+                        t_graph_out += self.residual_t(feature_t)
+                        v_graph_out += self.residual_v(feature_v)
+                    a_graph_out = None
+                    h_list = [t_graph_out, v_graph_out]
+                    
+                elif 't' in self.modals and 'a' in self.modals:
+                    t_graph_out = a_to_t_graph_out 
+                    a_graph_out = t_to_a_graph_out 
+                    if not self.no_residual:
+                        t_graph_out += self.residual_t(feature_t)
+                        a_graph_out += self.residual_a(feature_a)
+                    v_graph_out = None
+                    h_list = [t_graph_out, a_graph_out]
+                elif 'v' in self.modals and 'a' in self.modals:
+                    v_graph_out = a_to_v_graph_out 
+                    a_graph_out = v_to_a_graph_out 
+                    if not self.no_residual:
+                        v_graph_out += self.residual_v(feature_v)
+                        a_graph_out += self.residual_a(feature_a)
+                    t_graph_out = None
+                    h_list = [v_graph_out, a_graph_out]
+        else:
+            h_list = [feature_t, feature_v, feature_a]
 
         if self.fusion_method == 'gated':
             fused_feature = self.gated_fusion(h_list)
@@ -207,14 +223,20 @@ class DiGemo(nn.Module):
             fused_feature = self.reduce_cat(torch.cat(h_list, dim=-1))
         
         # Cls
-        t_logit, v_logit, a_logit = None, None, None
-        if t_graph_out is not None:
-            t_logit = self.t_cls_layer(t_graph_out) # (N, nclass)
-        if v_graph_out is not None:
-            v_logit = self.v_cls_layer(v_graph_out)
-        if a_graph_out is not None:
-            a_logit = self.a_cls_layer(a_graph_out)
-        fused_logit = self.fusion_cls_layer(fused_feature)
+        if not self.no_graph:
+            t_logit, v_logit, a_logit = None, None, None
+            if t_graph_out is not None:
+                t_logit = self.t_cls_layer(t_graph_out) # (N, nclass)
+            if v_graph_out is not None:
+                v_logit = self.v_cls_layer(v_graph_out)
+            if a_graph_out is not None:
+                a_logit = self.a_cls_layer(a_graph_out)
+            fused_logit = self.fusion_cls_layer(fused_feature)
+        else:
+            t_logit = self.t_cls_layer(feature_t)
+            v_logit = self.v_cls_layer(feature_v)
+            a_logit = self.a_cls_layer(feature_a)
+            fused_logit = self.fusion_cls_layer(fused_feature)
 
         return fused_logit, t_logit, v_logit, a_logit, fused_feature
     

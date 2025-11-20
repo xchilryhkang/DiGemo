@@ -22,6 +22,7 @@ from dataloader import (
 from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
 import argparse
+from plot import plot_tsne, plot_confusion_matrix
 
 
 parser = argparse.ArgumentParser()
@@ -83,6 +84,8 @@ parser.add_argument("--fusion_method", default="gated", help="fusion method: gat
 parser.add_argument("--no_residual", action="store_true", default=False, help="does not use residual graph")
 
 parser.add_argument("--no_dot", action="store_true", default=False, help="does not use the multiplication conv operation")
+
+parser.add_argument("--no_graph", action="store_true", default=False, help="does not use cross graph")
 
 args = parser.parse_args()
 
@@ -248,6 +251,7 @@ def main(local_rank, wins, seeds):
 
             best_f1_emo, best_loss = None, None
             best_label_emo, best_pred_emo = None, None
+            best_initial_feats = None
             best_extracted_feats = None
             all_f1_emo, all_acc_emo, all_loss = [], [], []
 
@@ -339,6 +343,8 @@ def main(local_rank, wins, seeds):
                     if best_f1_emo == None or best_f1_emo < test_f1_emo:
                         best_f1_emo = test_f1_emo
                         best_label_emo, best_pred_emo = test_label_emo, test_pred_emo
+                        best_initial_feats = test_initial_feats
+                        best_extracted_feats = test_extracted_feats
 
                     if (epoch + 1) % 10 == 0:
                         np.set_printoptions(suppress=True)
@@ -416,10 +422,14 @@ def main(local_rank, wins, seeds):
                                         best_pred_emo,
                                         digits=4,
                                         zero_division=0))
-                print(confusion_matrix(best_label_emo, best_pred_emo))
+                conf_matrix = confusion_matrix(best_label_emo, best_pred_emo)
+                print(conf_matrix)
+                plot_confusion_matrix(conf_matrix, args.dataset, f'conf_{args.seed}')
+                plot_tsne(best_initial_feats, best_label_emo, args.dataset, f'initial_features_{args.seed}')
+                plot_tsne(best_extracted_feats, best_label_emo, args.dataset, f'extracted_features_{args.seed}')
+
 
     dist.destroy_process_group()
-
 
 
 if __name__ == "__main__":
