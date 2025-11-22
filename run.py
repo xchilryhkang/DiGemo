@@ -87,6 +87,8 @@ parser.add_argument("--no_dot", action="store_true", default=False, help="does n
 
 parser.add_argument("--no_graph", action="store_true", default=False, help="does not use cross graph")
 
+parser.add_argument("--no_DGAE", action="store_true", default=False, help="does not use DGAE module")
+
 args = parser.parse_args()
 
 os.environ["MASTER_ADDR"] = "localhost"

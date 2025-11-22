@@ -15,6 +15,7 @@ class DiGemo(nn.Module):
         self.fusion_method = args.fusion_method
         self.no_residual = args.no_residual
         self.no_graph = args.no_graph
+        self.no_DGAE = args.no_DGAE
 
         # # Conv layers
         # self.conv_t = nn.Conv1d(embedding_dims[0], args.hidden_dim, kernel_size=1, padding=0, bias=False) 
@@ -133,11 +134,11 @@ class DiGemo(nn.Module):
 
         umask = umask.transpose(0, 1) # (B, L)
 
-        if 't' in self.modals:
+        if 't' in self.modals and not self.no_DGAE:
             feature_t = self.enhance_t(feature_t, umask, spk_embeddings) # (B, L, D)
-        if 'v' in self.modals:
+        if 'v' in self.modals and not self.no_DGAE:
             feature_v = self.enhance_v(feature_v, umask, spk_embeddings)
-        if 'a' in self.modals:
+        if 'a' in self.modals and not self.no_DGAE:
             feature_a = self.enhance_a(feature_a, umask, spk_embeddings)
 
         if 't' in self.modals:
