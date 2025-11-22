@@ -456,7 +456,7 @@ if __name__ == "__main__":
     #         mp.spawn(fn=main, args=(), nprocs=n_gpus)
     # wins = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
     wins = [17]
-    seeds = [539, 901, 247, 890, 801, 597, 267, 496, 21, 295]
+    seeds = [260, 9161, 1833, 3216, 3620, 6083, 4642, 2931, 5973, 2136]
     mp.spawn(fn=main, args=(wins, seeds), nprocs=n_gpus)
 
             
