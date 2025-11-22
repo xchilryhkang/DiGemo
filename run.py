@@ -376,8 +376,15 @@ def main(local_rank, wins, seeds):
                 log_path = "results/log_results.txt"
                 os.makedirs("results", exist_ok=True)
 
+                report_str = classification_report(best_label_emo,
+                                        best_pred_emo,
+                                        digits=4,
+                                        zero_division=0)
+
                 with open(log_path, "a") as f:
                     f.write(f"Win: {args.win[0]}  seed: {args.seed}  Acc: {max(all_acc_emo):.4f}   F-Score: {max(all_f1_emo):.4f}\n")
+                    f.write(report_str + "\n")
+
                 # if not os.path.exists("results/record_{}_{}_{}.pk".format(
                 #         today.year, today.month, today.day)):
                 #     with open(
@@ -417,11 +424,7 @@ def main(local_rank, wins, seeds):
                 # ) as f:
                 #     pk.dump(record, f)
 
-                print(
-                    classification_report(best_label_emo,
-                                        best_pred_emo,
-                                        digits=4,
-                                        zero_division=0))
+                print(report_str)
                 conf_matrix = confusion_matrix(best_label_emo, best_pred_emo)
                 print(conf_matrix)
                 plot_confusion_matrix(conf_matrix, args.dataset, f'conf_{args.seed}')
@@ -451,7 +454,7 @@ if __name__ == "__main__":
     #         mp.spawn(fn=main, args=(), nprocs=n_gpus)
     # wins = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
     wins = [17]
-    seeds = [2020, 2021, 2022, 2023, 2024, 2025, 2026, 2027, 2028, 2029]
+    seeds = [539, 901, 247, 890, 801, 597, 267, 496, 21, 295]
     mp.spawn(fn=main, args=(wins, seeds), nprocs=n_gpus)
 
             
