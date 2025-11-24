@@ -183,17 +183,17 @@ class DiGemo(nn.Module):
                 v_graph_out = t_to_v_graph_out + a_to_v_graph_out 
                 a_graph_out = t_to_a_graph_out + v_to_a_graph_out 
                 if not self.no_residual:
-                    t_graph_out += self.residual_t(feature_t)
-                    v_graph_out += self.residual_v(feature_v)
-                    a_graph_out += self.residual_a(feature_a)
+                    t_graph_out = t_graph_out + self.residual_t(feature_t)
+                    v_graph_out = v_graph_out + self.residual_v(feature_v)
+                    a_graph_out = a_graph_out + self.residual_a(feature_a)
                 h_list = [t_graph_out, v_graph_out, a_graph_out]
             else:
                 if 't' in self.modals and 'v' in self.modals:
                     t_graph_out = v_to_t_graph_out 
                     v_graph_out = t_to_v_graph_out 
                     if not self.no_residual:
-                        t_graph_out += self.residual_t(feature_t)
-                        v_graph_out += self.residual_v(feature_v)
+                        t_graph_out = t_graph_out + self.residual_t(feature_t)
+                        v_graph_out = v_graph_out + self.residual_v(feature_v)
                     a_graph_out = None
                     h_list = [t_graph_out, v_graph_out]
                     
@@ -201,16 +201,16 @@ class DiGemo(nn.Module):
                     t_graph_out = a_to_t_graph_out 
                     a_graph_out = t_to_a_graph_out 
                     if not self.no_residual:
-                        t_graph_out += self.residual_t(feature_t)
-                        a_graph_out += self.residual_a(feature_a)
+                        t_graph_out = t_graph_out + self.residual_t(feature_t)
+                        a_graph_out = a_graph_out + self.residual_a(feature_a)
                     v_graph_out = None
                     h_list = [t_graph_out, a_graph_out]
                 elif 'v' in self.modals and 'a' in self.modals:
                     v_graph_out = a_to_v_graph_out 
                     a_graph_out = v_to_a_graph_out 
                     if not self.no_residual:
-                        v_graph_out += self.residual_v(feature_v)
-                        a_graph_out += self.residual_a(feature_a)
+                        v_graph_out = v_graph_out + self.residual_v(feature_v)
+                        a_graph_out = a_graph_out + self.residual_a(feature_a)
                     t_graph_out = None
                     h_list = [v_graph_out, a_graph_out]
         else:
