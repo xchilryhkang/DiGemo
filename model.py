@@ -218,10 +218,18 @@ class DiGemo(nn.Module):
 
         if self.fusion_method == 'gated':
             fused_feature = self.gated_fusion(h_list)
-        elif self.fusion_method == 'add':
+        elif self.fusion_method == 'mean':
             fused_feature = torch.sum(torch.stack(h_list), dim=0) / len(h_list)
         elif self.fusion_method == 'concat':
             fused_feature = self.reduce_cat(torch.cat(h_list, dim=-1))
+        elif self.fusion_method == 'add':
+            fused_feature = torch.sum(torch.stack(h_list), dim=0)
+        elif self.fusion_method == 'min':
+            fused_feature = torch.min(torch.stack(h_list), dim=0).values
+        elif self.fusion_method == 'max':
+            fused_feature = torch.max(torch.stack(h_list), dim=0).values
+        
+        
         
         # Cls
         if not self.no_graph:
