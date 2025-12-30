@@ -224,8 +224,6 @@ class DiGemo(nn.Module):
             fused_feature = self.reduce_cat(torch.cat(h_list, dim=-1))
         elif self.fusion_method == 'add':
             fused_feature = torch.sum(torch.stack(h_list), dim=0)
-        elif self.fusion_method == 'min':
-            fused_feature = torch.min(torch.stack(h_list), dim=0).values
         elif self.fusion_method == 'max':
             fused_feature = torch.max(torch.stack(h_list), dim=0).values
         

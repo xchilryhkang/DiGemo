@@ -79,7 +79,7 @@ parser.add_argument("--no_intra", action="store_true", default=False, help="does
 
 parser.add_argument("--no_residual_graph", action="store_true", default=False, help="does not use residual into graph")
 
-parser.add_argument("--fusion_method", default="gated", help="fusion method: gated/concat/add")
+parser.add_argument("--fusion_method", default="gated", help="fusion method: gated/concat/add/mean/max")
 
 parser.add_argument("--no_residual", action="store_true", default=False, help="does not use residual graph")
 
@@ -454,7 +454,6 @@ if __name__ == "__main__":
     #         args.seed += 1
     #         print(args.seed)
     #         mp.spawn(fn=main, args=(), nprocs=n_gpus)
-    # wins = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
     wins = [17]
     seeds = [260, 9161, 1833, 3216, 3620, 6083, 4642, 2931, 5973, 2136]
     mp.spawn(fn=main, args=(wins, seeds), nprocs=n_gpus)
