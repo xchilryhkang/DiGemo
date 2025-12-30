@@ -57,7 +57,7 @@ parser.add_argument("--dropout_1", type=float, default=0.1, metavar="DR1", help=
 
 parser.add_argument("--dropout_2", type=float, default=0.2, metavar="DR2", help="dropout rate into GCN")
 
-parser.add_argument("--loss_type", default="distill", help="distill/wo_distill/auto")
+parser.add_argument("--loss_type", default="distil", help="distil/wo_distil/auto")
 
 parser.add_argument("--gammas", nargs="+", type=float, default=[1.0, 1.0, 1.0], help="[task_loss, uni_ce_loss, kl_loss]")
 
@@ -347,6 +347,24 @@ def main(local_rank, wins, seeds):
                         best_label_emo, best_pred_emo = test_label_emo, test_pred_emo
                         best_initial_feats = test_initial_feats
                         best_extracted_feats = test_extracted_feats
+
+                        # save checkpoints
+                        save_dir = "checkpoints"
+                        if not os.path.exists(save_dir):
+                            os.makedirs(save_dir)
+
+                        save_path = os.path.join(save_dir, f"best_model_{args.dataset}_{args.seed}.pth")
+
+                        checkpoint = {
+                            'model_state_dict': model.module.state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                            'args': args,
+                            'f1': best_f1_emo,
+                            'epoch': epoch + 1 
+                        }
+
+                        torch.save(checkpoint, save_path)
+
 
                     if (epoch + 1) % 10 == 0:
                         np.set_printoptions(suppress=True)
