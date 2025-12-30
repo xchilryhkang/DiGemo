@@ -57,7 +57,7 @@ parser.add_argument("--dropout_1", type=float, default=0.1, metavar="DR1", help=
 
 parser.add_argument("--dropout_2", type=float, default=0.2, metavar="DR2", help="dropout rate into GCN")
 
-parser.add_argument("--loss_type", default="sdt", help="sdt/wo_sdt/auto")
+parser.add_argument("--loss_type", default="distill", help="distill/wo_distill/auto")
 
 parser.add_argument("--gammas", nargs="+", type=float, default=[1.0, 1.0, 1.0], help="[task_loss, uni_ce_loss, kl_loss]")
 

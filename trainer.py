@@ -95,9 +95,9 @@ def train_or_eval_model(
         if loss_type == "auto":
             loss = awl([loss_emo, (loss_t + loss_v + loss_a), (kl_loss_t + kl_loss_v + kl_loss_a)])
             pass  
-        elif loss_type == "wo_sdt":
+        elif loss_type == "wo_distil":
             loss = loss_emo
-        elif loss_type == 'sdt':
+        elif loss_type == 'distil':
             loss = gammas[0] * loss_emo + gammas[1] * (loss_t + loss_v + loss_a) + gammas[2] * (kl_loss_t + kl_loss_v + kl_loss_a)
         else:
             NotImplementedError
