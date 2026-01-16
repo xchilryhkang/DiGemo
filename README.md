@@ -8,6 +8,11 @@ pip install -r requirements.txt
 ```
 
 ## Datasets
+The benchmark datasets used in our paper are IEMOCAP and MELD.
+Following prior work, we use pre-extracted, preprocessed features and provide download links here: 
+[preprocessed features](https://drive.google.com/drive/folders/1qrlada7_F-YXgIvI5SmqEVBVxnJGNf3P?usp=drive_link).
+We also acknowledge [GraphSmile](https://github.com/lijfrank/GraphSmile) for releasing their code and datasets.
+Please set the dataset path in run.py accordingly.
 
 ## Run 
 ### IEMOCAP

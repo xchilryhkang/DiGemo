@@ -109,30 +109,21 @@ class TransformerLayer(nn.Module):
         return self.feed_forward(output)
     
 
-class DABE(nn.Module):
+class TransformerBasedContext(nn.Module):
 
-    def __init__(self, hidden_dim, ff_dim, num_heads, dropout, no_gate=False, no_speaker=False, no_pos=False, no_intra=False):
+    def __init__(self, hidden_dim, ff_dim, num_heads, dropout):
         super().__init__()
         self.gate = DynamicGating(hidden_dim)
         self.pos_emb = PositionalEncoding(hidden_dim)
         self.trans_layer = TransformerLayer(hidden_dim, ff_dim, num_heads, dropout)
         self.dropout = nn.Dropout(dropout)
-        self.no_gate = no_gate
-        self.no_speaker = no_speaker
-        self.no_pos = no_pos
-        self.no_intra = no_intra
 
     def forward(self, x, mask, speaker_emb):
-        if not self.no_gate:
-            x = self.gate(x)
-        if not self.no_speaker:
-            x += speaker_emb
-        if not self.no_pos:
-            x = self.pos_emb(x)
-        if not self.no_pos or not self.no_speaker:
-            x = self.dropout(x)
-        if not self.no_intra:
-            x = self.trans_layer(x, mask)
+        x = self.gate(x)
+        x += speaker_emb
+        x = self.pos_emb(x)
+        x = self.dropout(x)
+        x = self.trans_layer(x, mask)
         return x
             
                   
@@ -178,25 +169,22 @@ class EdgeWeightGen(nn.Module):
 
 class CrossModalGraphLayer(nn.Module):
     
-    def __init__(self, in_features, out_features, no_dot=False):
+    def __init__(self, in_features, out_features):
         super().__init__()
         self.W1 = nn.Linear(in_features, out_features, bias=False)
         self.W2 = nn.Linear(2 * out_features, out_features, bias=False)
-        self.no_dot = no_dot
 
     def forward(self, input, adj):
         proj_input = self.W1(input)
         neighboor = torch.spmm(adj, proj_input)
-        if not self.no_dot: 
-            updated_feature = F.leaky_relu(self.W2(torch.cat([input + neighboor, input * neighboor], dim=-1)))
-        else:
-            updated_feature = F.leaky_relu(input + neighboor)
+         
+        updated_feature = F.leaky_relu(self.W2(torch.cat([input + neighboor, input * neighboor], dim=-1)))
         return updated_feature
 
 
 class CrossModalGraph(nn.Module):
 
-    def __init__(self, hidden_dim, num_layers, no_cuda, no_dot):
+    def __init__(self, hidden_dim, num_layers, no_cuda):
         super().__init__()
         self.num_layers = num_layers
         self.no_cuda = no_cuda
@@ -204,7 +192,7 @@ class CrossModalGraph(nn.Module):
         self.edge_weight_gen = EdgeWeightGen(hidden_dim=hidden_dim, shared_dim=hidden_dim // 4)
 
         self.graph_layers = nn.ModuleList([
-            CrossModalGraphLayer(hidden_dim, hidden_dim, no_dot)
+            CrossModalGraphLayer(hidden_dim, hidden_dim)
             for _ in range(num_layers)
         ])
 

@@ -5,10 +5,10 @@ from sklearn.metrics import f1_score, accuracy_score
 from utils import AutomaticWeightedLoss
 
 
-seed = 2025
+# seed = 2025
 
 
-def seed_everything(seed=seed):
+def seed_everything(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

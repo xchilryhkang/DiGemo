@@ -61,33 +61,19 @@ parser.add_argument("--loss_type", default="distil", help="distil/wo_distil/auto
 
 parser.add_argument("--gammas", nargs="+", type=float, default=[1.0, 1.0, 1.0], help="[task_loss, uni_ce_loss, kl_loss]")
 
-parser.add_argument("--conv_kernel", type=int, default=1, help="kernel size of conv layers")
-
 parser.add_argument("--num_heads", type=int, default=8, metavar="H", help="number of heads of trans layers")
 
 parser.add_argument("--temp", type=float, default=1.0, help="temp of KL loss")
 
 parser.add_argument("--seed", type=int, default=2020, help="seed")
 
-parser.add_argument("--no_speaker", action="store_true", default=False, help="does not use speaker emb")
-
-parser.add_argument("--no_pos", action="store_true", default=False, help="does not use positinal emb")
-
-parser.add_argument("--no_gate", action="store_true", default=False, help="does not use dynamic gating")
-
-parser.add_argument("--no_intra", action="store_true", default=False, help="does not use Trans layer")
-
-parser.add_argument("--no_residual_graph", action="store_true", default=False, help="does not use residual into graph")
+parser.add_argument("--no_intra", action="store_true", default=False, help="does not use Trans based contextual modeling")
 
 parser.add_argument("--fusion_method", default="gated", help="fusion method: gated/concat/add/mean/max")
-
+    
 parser.add_argument("--no_residual", action="store_true", default=False, help="does not use residual graph")
 
-parser.add_argument("--no_dot", action="store_true", default=False, help="does not use the multiplication conv operation")
-
 parser.add_argument("--no_graph", action="store_true", default=False, help="does not use cross graph")
-
-parser.add_argument("--no_DGAE", action="store_true", default=False, help="does not use DGAE module")
 
 args = parser.parse_args()
 
@@ -166,128 +152,155 @@ def setup_samplers(trainset, valid_ratio, epoch):
     valid_sampler.set_epoch(epoch)
 
 
-def main(local_rank, wins, seeds):
+def main(local_rank, seeds):
     
     print(f"Running main(**args) on rank {local_rank}.")
-    init_ddp(local_rank)
-    for win in wins:  
-        for seed in seeds:
-            args.win = [win, win]
-            args.seed = seed
+    init_ddp(local_rank) 
+    for seed in seeds:
+        args.seed = seed
 
-            today = datetime.datetime.now()
-            name_ = args.modals + "_" + args.dataset
+        today = datetime.datetime.now()
+        name_ = args.modals + "_" + args.dataset
 
-            cuda = torch.cuda.is_available() and not args.no_cuda
-            if args.tensorboard:
-                writer = SummaryWriter()
+        cuda = torch.cuda.is_available() and not args.no_cuda
+        if args.tensorboard:
+            writer = SummaryWriter()
 
-            if args.dataset == "IEMOCAP":
-                embedding_dims = [1024, 342, 1582]
-                n_classes_emo = 6
-            elif args.dataset == "IEMOCAP4":
-                embedding_dims = [1024, 512, 100]
-                n_classes_emo = 4
-            elif args.dataset == "MELD":
-                embedding_dims = [1024, 342, 300]
-                n_classes_emo = 7
-            elif args.dataset == "CMUMOSEI7":
-                embedding_dims = [1024, 35, 384]
-                n_classes_emo = 7
+        if args.dataset == "IEMOCAP":
+            embedding_dims = [1024, 342, 1582]
+            n_classes_emo = 6
+        elif args.dataset == "IEMOCAP4":
+            embedding_dims = [1024, 512, 100]
+            n_classes_emo = 4
+        elif args.dataset == "MELD":
+            embedding_dims = [1024, 342, 300]
+            n_classes_emo = 7
+        elif args.dataset == "CMUMOSEI7":
+            embedding_dims = [1024, 35, 384]
+            n_classes_emo = 7
 
-            seed_everything(args.seed)
-            model = DiGemo(args, embedding_dims, n_classes_emo)
+        seed_everything(args.seed)
+        model = DiGemo(args, embedding_dims, n_classes_emo)
 
-            model = model.to(local_rank)
-            model = DDP(
+        model = model.to(local_rank)
+        model = DDP(
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=True
+        )
+
+        loss_function_emo = nn.NLLLoss()
+        loss_function_kl = nn.KLDivLoss(reduction='batchmean')
+
+        if args.loss_type == "auto":
+            awl = AutomaticWeightedLoss(3)
+            optimizer = optim.AdamW(
+                [
+                    {
+                        "params": model.parameters()
+                    },
+                    {
+                        "params": awl.parameters(),
+                        "weight_decay": 0
+                    },
+                ],
+                lr=args.lr,
+                weight_decay=args.l2,
+                amsgrad=True,
+            )
+        else:
+            awl = None
+            optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.l2, amsgrad=True)
+
+        if args.dataset == "MELD":
+            train_loader, valid_loader, test_loader = get_data_loaders(
+                path=MELD_path,
+                dataset_class=MELDDataset_BERT,
+                valid_ratio=0.1,
+                batch_size=args.batch_size,
+                num_workers=0,
+                pin_memory=False
+            )
+        elif args.dataset == "IEMOCAP":
+            train_loader, valid_loader, test_loader = get_data_loaders(
+                path=IEMOCAP_path,
+                dataset_class=IEMOCAPDataset_BERT,
+                valid_ratio=0.1,
+                batch_size=args.batch_size,
+                num_workers=0,
+                pin_memory=False
+            )
+        
+        else:
+            print("There is no such dataset")
+
+        best_f1_emo, best_loss = None, None
+        best_label_emo, best_pred_emo = None, None
+        best_initial_feats = None
+        best_extracted_feats = None
+        all_f1_emo, all_acc_emo, all_loss = [], [], []
+
+        for epoch in range(args.epochs):
+            if args.dataset == "MELD":
+                trainset = MELDDataset_BERT(MELD_path)
+            elif args.dataset == "IEMOCAP":
+                trainset = IEMOCAPDataset_BERT(IEMOCAP_path)
+
+            setup_samplers(trainset, valid_ratio=0.1, epoch=epoch)
+
+            start_time = time.time()
+
+            train_loss, _, _, train_acc_emo, train_f1_emo, _, _, _ = train_or_eval_model(
                 model,
-                device_ids=[local_rank],
-                output_device=local_rank,
-                find_unused_parameters=True
+                loss_function_emo,
+                loss_function_kl,
+                train_loader,
+                cuda,
+                args.modals,
+                optimizer,
+                True,
+                args.loss_type,
+                args.gammas,
+                args.temp,
+                awl,
+                args.seed
             )
 
-            loss_function_emo = nn.NLLLoss()
-            loss_function_kl = nn.KLDivLoss(reduction='batchmean')
+            valid_loss, _, _, valid_acc_emo, valid_f1_emo, _, _, _ = train_or_eval_model(
+                model,
+                loss_function_emo,
+                loss_function_kl,
+                valid_loader,
+                cuda,
+                args.modals,
+                None,
+                False,
+                args.loss_type,
+                args.gammas,
+                args.temp,
+                awl,
+                args.seed
+            )
 
-            if args.loss_type == "auto":
-                awl = AutomaticWeightedLoss(3)
-                optimizer = optim.AdamW(
-                    [
-                        {
-                            "params": model.parameters()
-                        },
-                        {
-                            "params": awl.parameters(),
-                            "weight_decay": 0
-                        },
-                    ],
-                    lr=args.lr,
-                    weight_decay=args.l2,
-                    amsgrad=True,
-                )
-            else:
-                awl = None
-                optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.l2, amsgrad=True)
+            print(
+                "epoch: {}, train_loss: {}, train_acc_emo: {}, train_f1_emo: {}, valid_loss: {}, valid_acc_emo: {}, valid_f1_emo: {}"
+                .format(
+                    epoch + 1,
+                    train_loss,
+                    train_acc_emo,
+                    train_f1_emo,
+                    valid_loss,
+                    valid_acc_emo,
+                    valid_f1_emo
+                ))
 
-            if args.dataset == "MELD":
-                train_loader, valid_loader, test_loader = get_data_loaders(
-                    path=MELD_path,
-                    dataset_class=MELDDataset_BERT,
-                    valid_ratio=0.1,
-                    batch_size=args.batch_size,
-                    num_workers=0,
-                    pin_memory=False
-                )
-            elif args.dataset == "IEMOCAP":
-                train_loader, valid_loader, test_loader = get_data_loaders(
-                    path=IEMOCAP_path,
-                    dataset_class=IEMOCAPDataset_BERT,
-                    valid_ratio=0.1,
-                    batch_size=args.batch_size,
-                    num_workers=0,
-                    pin_memory=False
-                )
-           
-            else:
-                print("There is no such dataset")
-
-            best_f1_emo, best_loss = None, None
-            best_label_emo, best_pred_emo = None, None
-            best_initial_feats = None
-            best_extracted_feats = None
-            all_f1_emo, all_acc_emo, all_loss = [], [], []
-
-            for epoch in range(args.epochs):
-                if args.dataset == "MELD":
-                    trainset = MELDDataset_BERT(MELD_path)
-                elif args.dataset == "IEMOCAP":
-                    trainset = IEMOCAPDataset_BERT(IEMOCAP_path)
-
-                setup_samplers(trainset, valid_ratio=0.1, epoch=epoch)
-
-                start_time = time.time()
-
-                train_loss, _, _, train_acc_emo, train_f1_emo, _, _, _ = train_or_eval_model(
+            if local_rank == 0:
+                test_loss, test_label_emo, test_pred_emo, test_acc_emo, test_f1_emo, _, test_initial_feats, test_extracted_feats = train_or_eval_model(
                     model,
                     loss_function_emo,
                     loss_function_kl,
-                    train_loader,
-                    cuda,
-                    args.modals,
-                    optimizer,
-                    True,
-                    args.loss_type,
-                    args.gammas,
-                    args.temp,
-                    awl,
-                    args.seed
-                )
-
-                valid_loss, _, _, valid_acc_emo, valid_f1_emo, _, _, _ = train_or_eval_model(
-                    model,
-                    loss_function_emo,
-                    loss_function_kl,
-                    valid_loader,
+                    test_loader,
                     cuda,
                     args.modals,
                     None,
@@ -299,157 +312,89 @@ def main(local_rank, wins, seeds):
                     args.seed
                 )
 
+                all_f1_emo.append(test_f1_emo)
+                all_acc_emo.append(test_acc_emo)
+
                 print(
-                    "epoch: {}, train_loss: {}, train_acc_emo: {}, train_f1_emo: {}, valid_loss: {}, valid_acc_emo: {}, valid_f1_emo: {}"
+                    "test_loss: {}, test_acc_emo: {}, test_f1_emo: {}, total time: {} sec, {}"
                     .format(
-                        epoch + 1,
-                        train_loss,
-                        train_acc_emo,
-                        train_f1_emo,
-                        valid_loss,
-                        valid_acc_emo,
-                        valid_f1_emo
+                        test_loss,
+                        test_acc_emo,
+                        test_f1_emo,
+                        round(time.time() - start_time, 2),
+                        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
                     ))
+                print("-" * 100)
+                
+                if best_f1_emo == None or best_f1_emo < test_f1_emo:
+                    best_f1_emo = test_f1_emo
+                    best_label_emo, best_pred_emo = test_label_emo, test_pred_emo
+                    best_initial_feats = test_initial_feats
+                    best_extracted_feats = test_extracted_feats
 
-                if local_rank == 0:
-                    test_loss, test_label_emo, test_pred_emo, test_acc_emo, test_f1_emo, _, test_initial_feats, test_extracted_feats = train_or_eval_model(
-                        model,
-                        loss_function_emo,
-                        loss_function_kl,
-                        test_loader,
-                        cuda,
-                        args.modals,
-                        None,
-                        False,
-                        args.loss_type,
-                        args.gammas,
-                        args.temp,
-                        awl,
-                        args.seed
-                    )
+                    # save checkpoints
+                    save_dir = "checkpoints"
+                    if not os.path.exists(save_dir):
+                        os.makedirs(save_dir)
 
-                    all_f1_emo.append(test_f1_emo)
-                    all_acc_emo.append(test_acc_emo)
+                    save_path = os.path.join(save_dir, f"best_model_{args.dataset}_{args.seed}.pth")
 
-                    print(
-                        "test_loss: {}, test_acc_emo: {}, test_f1_emo: {}, total time: {} sec, {}"
-                        .format(
-                            test_loss,
-                            test_acc_emo,
-                            test_f1_emo,
-                            round(time.time() - start_time, 2),
-                            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
-                        ))
+                    checkpoint = {
+                        'model_state_dict': model.module.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'args': args,
+                        'f1': best_f1_emo,
+                        'epoch': epoch + 1 
+                    }
+
+                    torch.save(checkpoint, save_path)
+
+
+                if (epoch + 1) % 10 == 0:
+                    np.set_printoptions(suppress=True)
+                    print(classification_report(best_label_emo, best_pred_emo, digits=4, zero_division=0))
+                    print(confusion_matrix(best_label_emo, best_pred_emo))
                     print("-" * 100)
-                    
-                    if best_f1_emo == None or best_f1_emo < test_f1_emo:
-                        best_f1_emo = test_f1_emo
-                        best_label_emo, best_pred_emo = test_label_emo, test_pred_emo
-                        best_initial_feats = test_initial_feats
-                        best_extracted_feats = test_extracted_feats
 
-                        # save checkpoints
-                        save_dir = "checkpoints"
-                        if not os.path.exists(save_dir):
-                            os.makedirs(save_dir)
-
-                        save_path = os.path.join(save_dir, f"best_model_{args.dataset}_{args.seed}.pth")
-
-                        checkpoint = {
-                            'model_state_dict': model.module.state_dict(),
-                            'optimizer_state_dict': optimizer.state_dict(),
-                            'args': args,
-                            'f1': best_f1_emo,
-                            'epoch': epoch + 1 
-                        }
-
-                        torch.save(checkpoint, save_path)
-
-
-                    if (epoch + 1) % 10 == 0:
-                        np.set_printoptions(suppress=True)
-                        print(classification_report(best_label_emo, best_pred_emo, digits=4, zero_division=0))
-                        print(confusion_matrix(best_label_emo, best_pred_emo))
-                        print("-" * 100)
-
-                dist.barrier()
-
-                if args.tensorboard:
-                    writer.add_scalar("test: accuracy", test_acc_emo, epoch)
-                    writer.add_scalar("test: fscore", test_f1_emo, epoch)
-                    writer.add_scalar("train: accuracy", train_acc_emo, epoch)
-                    writer.add_scalar("train: fscore", train_f1_emo, epoch)
-
-                if epoch == 1:
-                    allocated_memory = torch.cuda.memory_allocated()
-                    reserved_memory = torch.cuda.memory_reserved()
-                    print(f"Allocated Memory: {allocated_memory / 1024**2:.2f} MB")
-                    print(f"Reserved Memory: {reserved_memory / 1024**2:.2f} MB")
-                    print(f"All Memory: {(allocated_memory + reserved_memory) / 1024**2:.2f} MB")
+            dist.barrier()
 
             if args.tensorboard:
-                writer.close()
-            if local_rank == 0:
-                print("Test performance..")
-                print("Acc: {}, F-Score: {}".format(max(all_acc_emo), max(all_f1_emo)))
+                writer.add_scalar("test: accuracy", test_acc_emo, epoch)
+                writer.add_scalar("test: fscore", test_f1_emo, epoch)
+                writer.add_scalar("train: accuracy", train_acc_emo, epoch)
+                writer.add_scalar("train: fscore", train_f1_emo, epoch)
 
-                log_path = "results/log_results.txt"
-                os.makedirs("results", exist_ok=True)
+            if epoch == 1:
+                allocated_memory = torch.cuda.memory_allocated()
+                reserved_memory = torch.cuda.memory_reserved()
+                print(f"Allocated Memory: {allocated_memory / 1024**2:.2f} MB")
+                print(f"Reserved Memory: {reserved_memory / 1024**2:.2f} MB")
+                print(f"All Memory: {(allocated_memory + reserved_memory) / 1024**2:.2f} MB")
 
-                report_str = classification_report(best_label_emo,
-                                        best_pred_emo,
-                                        digits=4,
-                                        zero_division=0)
+        if args.tensorboard:
+            writer.close()
+        if local_rank == 0:
+            print("Test performance..")
+            print("Acc: {}, F-Score: {}".format(max(all_acc_emo), max(all_f1_emo)))
 
-                with open(log_path, "a") as f:
-                    f.write(f"Win: {args.win[0]}  seed: {args.seed}  Acc: {max(all_acc_emo):.4f}   F-Score: {max(all_f1_emo):.4f}\n")
-                    f.write(report_str + "\n")
+            log_path = "results/log_results.txt"
+            os.makedirs("results", exist_ok=True)
 
-                # if not os.path.exists("results/record_{}_{}_{}.pk".format(
-                #         today.year, today.month, today.day)):
-                #     with open(
-                #             "results/record_{}_{}_{}.pk".format(
-                #                 today.year, today.month, today.day),
-                #             "wb",
-                #     ) as f:
-                #         pk.dump({}, f)
-                # with open(
-                #         "results/record_{}_{}_{}.pk".format(today.year, today.month,
-                #                                             today.day),
-                #         "rb",
-                # ) as f:
-                #     record = pk.load(f)
-                # key_ = name_
-                # if record.get(key_, False):
-                #     record[key_].append(max(all_f1_emo))
-                # else:
-                #     record[key_] = [max(all_f1_emo)]
-                # if record.get(key_ + "record", False):
-                #     record[key_ + "record"].append(
-                #         classification_report(best_label_emo,
-                #                               best_pred_emo,
-                #                               digits=4,
-                #                               zero_division=0))
-                # else:
-                #     record[key_ + "record"] = [
-                #         classification_report(best_label_emo,
-                #                               best_pred_emo,
-                #                               digits=4,
-                #                               zero_division=0)
-                #     ]
-                # with open(
-                #         "results/record_{}_{}_{}.pk".format(today.year, today.month,
-                #                                             today.day),
-                #         "wb",
-                # ) as f:
-                #     pk.dump(record, f)
+            report_str = classification_report(best_label_emo,
+                                    best_pred_emo,
+                                    digits=4,
+                                    zero_division=0)
 
-                print(report_str)
-                conf_matrix = confusion_matrix(best_label_emo, best_pred_emo)
-                print(conf_matrix)
-                plot_confusion_matrix(conf_matrix, args.dataset, f'conf_{args.seed}')
-                plot_tsne(best_initial_feats, best_label_emo, args.dataset, f'initial_features_{args.seed}')
-                plot_tsne(best_extracted_feats, best_label_emo, args.dataset, f'extracted_features_{args.seed}')
+            with open(log_path, "a") as f:
+                f.write(f"Seed: {args.seed}  Acc: {max(all_acc_emo):.4f}   F-Score: {max(all_f1_emo):.4f}\n")
+                # f.write(report_str + "\n")
+
+            print(report_str)
+            # conf_matrix = confusion_matrix(best_label_emo, best_pred_emo)
+            # print(conf_matrix)
+            # plot_confusion_matrix(conf_matrix, args.dataset, f'conf_{args.seed}')
+            plot_tsne(best_initial_feats, best_label_emo, args.dataset, f'initial_features_{args.seed}')
+            plot_tsne(best_extracted_feats, best_label_emo, args.dataset, f'extracted_features_{args.seed}')
 
 
     dist.destroy_process_group()
@@ -461,19 +406,7 @@ if __name__ == "__main__":
     print("not args.no_cuda:", not args.no_cuda)
     n_gpus = torch.cuda.device_count()
     print(f"Use {n_gpus} GPUs")
-    # log_path = "results/log_results.txt"
-    # for i in range(1):
-    #     args.win = [args.win[0] + i, args.win[1] + i]
-    #     with open(log_path, "a") as f:
-    #         f.write(f"{args.win}\n")
-    #     if args.seed == 2029:
-    #         args.seed = 2019
-    #     for _ in range(10):
-    #         args.seed += 1
-    #         print(args.seed)
-    #         mp.spawn(fn=main, args=(), nprocs=n_gpus)
-    wins = [17]
     seeds = [260, 9161, 1833, 3216, 3620, 6083, 4642, 2931, 5973, 2136]
-    mp.spawn(fn=main, args=(wins, seeds), nprocs=n_gpus)
+    mp.spawn(fn=main, args=(seeds,), nprocs=n_gpus)
 
             

@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from module import DABE, GatedFusion, CrossModalGraph
+from module import TransformerBasedContext, GatedFusion, CrossModalGraph
 from utils import flatten_batch
 
 
@@ -15,7 +15,7 @@ class DiGemo(nn.Module):
         self.fusion_method = args.fusion_method
         self.no_residual = args.no_residual
         self.no_graph = args.no_graph
-        self.no_DGAE = args.no_DGAE
+        self.no_intra = args.no_intra
 
         # # Conv layers
         # self.conv_t = nn.Conv1d(embedding_dims[0], args.hidden_dim, kernel_size=1, padding=0, bias=False) 
@@ -34,43 +34,31 @@ class DiGemo(nn.Module):
 
         self.speaker_embeddings = nn.Embedding(self.n_speakers + 1, args.hidden_dim, padding_idx=self.n_speakers)
 
-        self.enhance_t = DABE(
+        self.enhance_t = TransformerBasedContext(
             args.hidden_dim,
             args.hidden_dim,
             args.num_heads,
-            args.dropout_1,
-            args.no_gate,
-            args.no_speaker, 
-            args.no_pos,
-            args.no_intra
+            args.dropout_1
         )
 
-        self.enhance_v = DABE(
+        self.enhance_v = TransformerBasedContext(
             args.hidden_dim,
             args.hidden_dim,
             args.num_heads,
-            args.dropout_1,
-            args.no_gate,
-            args.no_speaker, 
-            args.no_pos,
-            args.no_intra
+            args.dropout_1
         )
 
-        self.enhance_a = DABE(
+        self.enhance_a = TransformerBasedContext(
             args.hidden_dim,
             args.hidden_dim,
             args.num_heads,
-            args.dropout_1,
-            args.no_gate,
-            args.no_speaker, 
-            args.no_pos,
-            args.no_intra
+            args.dropout_1
         )
 
         # Heter graph
-        self.graph_tv = CrossModalGraph(args.hidden_dim, args.heter_n_layers[0], args.no_cuda, args.no_dot)
-        self.graph_ta = CrossModalGraph(args.hidden_dim, args.heter_n_layers[1], args.no_cuda, args.no_dot)
-        self.graph_va = CrossModalGraph(args.hidden_dim, args.heter_n_layers[2], args.no_cuda, args.no_dot)
+        self.graph_tv = CrossModalGraph(args.hidden_dim, args.heter_n_layers[0], args.no_cuda)
+        self.graph_ta = CrossModalGraph(args.hidden_dim, args.heter_n_layers[1], args.no_cuda)
+        self.graph_va = CrossModalGraph(args.hidden_dim, args.heter_n_layers[2], args.no_cuda)
 
         # residual module
         self.residual_t = nn.Sequential(
@@ -134,11 +122,11 @@ class DiGemo(nn.Module):
 
         umask = umask.transpose(0, 1) # (B, L)
 
-        if 't' in self.modals and not self.no_DGAE:
+        if 't' in self.modals and not self.no_intra:
             feature_t = self.enhance_t(feature_t, umask, spk_embeddings) # (B, L, D)
-        if 'v' in self.modals and not self.no_DGAE:
+        if 'v' in self.modals and not self.no_intra:
             feature_v = self.enhance_v(feature_v, umask, spk_embeddings)
-        if 'a' in self.modals and not self.no_DGAE:
+        if 'a' in self.modals and not self.no_intra:
             feature_a = self.enhance_a(feature_a, umask, spk_embeddings)
 
         if 't' in self.modals:
