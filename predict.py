@@ -1,17 +1,20 @@
 """
-complexity.py
+predict.py
 
-Tiện ích phân tích model DiGemo từ một checkpoint đã lưu.
+Utilities for the DiGemo model loaded from a saved checkpoint.
 
-Bố cục:
-    1. Phần load checkpoint dùng chung (build lại model + dummy input).
-    2. Các hàm thực hiện nhiệm vụ:
+Layout:
+    1. Shared checkpoint loading (rebuild model + dummy inputs).
+    2. Task functions:
         - calculate_complexity(): params, GFLOPs, inference time, peak memory.
-        - predict(): chạy forward và trả về nhãn dự đoán (tối giản).
+        - predict():              run a forward pass and return predicted labels.
+        - plot_confusion_from_checkpoint(): evaluate the test set and plot a
+          confusion matrix.
 
-Cách dùng nhanh:
-    python complexity.py --checkpoint ./checkpoints/best_model_IEMOCAP_9161.pth
-    python complexity.py --checkpoint <path> --seq_len 50 --batch_size 1 --runs 100 --warmup 20
+Quick start:
+    python predict.py --checkpoint ./checkpoints/best_model_IEMOCAP_260.pth
+    python predict.py --checkpoint ./checkpoints/best_model_IEMOCAP_260.pth --task confusion
+    python predict.py --checkpoint <path> --task confusion --feature_path ./features/iemocap_multi_features.pkl
 """
 
 import os
@@ -26,48 +29,52 @@ from model import DiGemo
 try:
     from thop import profile
     _HAS_THOP = True
-except Exception:  # thop chưa cài
+except Exception:  # thop not installed
     _HAS_THOP = False
 
 
 # ---------------------------------------------------------------------------
-# Cấu hình dataset: embedding_dims = [text, visual, audio]
-# n_speakers theo logic trong model.py (n_classes in {4, 6} -> 2, else 9).
+# Dataset config: embedding_dims = [text, visual, audio]
+# n_speakers follows model.py (n_classes in {4, 6} -> 2, else 9).
+# default_feature: default .pkl path used to build the test set.
 # ---------------------------------------------------------------------------
 DATASET_CONFIG = {
-    "IEMOCAP":   {"embedding_dims": [1024, 342, 1582], "n_classes": 6, "n_speakers": 2},
-    "IEMOCAP4":  {"embedding_dims": [1024, 512, 100],  "n_classes": 4, "n_speakers": 2},
-    "MELD":      {"embedding_dims": [1024, 342, 300],  "n_classes": 7, "n_speakers": 9},
-    "CMUMOSEI7": {"embedding_dims": [1024, 35, 384],   "n_classes": 7, "n_speakers": 9},
+    "IEMOCAP":   {"embedding_dims": [1024, 342, 1582], "n_classes": 6, "n_speakers": 2,
+                  "default_feature": "./features/iemocap_multi_features.pkl"},
+    "IEMOCAP4":  {"embedding_dims": [1024, 512, 100],  "n_classes": 4, "n_speakers": 2,
+                  "default_feature": None},
+    "MELD":      {"embedding_dims": [1024, 342, 300],  "n_classes": 7, "n_speakers": 9,
+                  "default_feature": "./features/meld_multi_features.pkl"},
+    "CMUMOSEI7": {"embedding_dims": [1024, 35, 384],   "n_classes": 7, "n_speakers": 9,
+                  "default_feature": None},
 }
 
 
 # ===========================================================================
-# 1. LOAD CHECKPOINT DÙNG CHUNG
+# 1. SHARED CHECKPOINT LOADING
 # ===========================================================================
 def _safe_torch_load(path, map_location):
-    """torch.load tương thích nhiều phiên bản (checkpoint chứa argparse.Namespace)."""
+    """torch.load compatible across versions (checkpoint holds an argparse.Namespace)."""
     try:
         return torch.load(path, map_location=map_location, weights_only=False)
     except TypeError:
-        # torch cũ không có tham số weights_only
         return torch.load(path, map_location=map_location)
 
 
 def _strip_module_prefix(state_dict):
-    """Bỏ tiền tố 'module.' nếu checkpoint được lưu từ DDP."""
+    """Strip the 'module.' prefix if the checkpoint was saved from DDP."""
     if any(k.startswith("module.") for k in state_dict):
         return {k.replace("module.", "", 1): v for k, v in state_dict.items()}
     return state_dict
 
 
 def resolve_dataset_config(args):
-    """Lấy embedding_dims / n_classes / n_speakers từ args.dataset."""
+    """Get embedding_dims / n_classes / n_speakers from args.dataset."""
     dataset = getattr(args, "dataset", None)
     if dataset not in DATASET_CONFIG:
         raise ValueError(
-            f"Dataset '{dataset}' chưa được hỗ trợ. "
-            f"Các lựa chọn hợp lệ: {list(DATASET_CONFIG.keys())}"
+            f"Dataset '{dataset}' is not supported. "
+            f"Valid options: {list(DATASET_CONFIG.keys())}"
         )
     cfg = DATASET_CONFIG[dataset]
     return cfg["embedding_dims"], cfg["n_classes"], cfg["n_speakers"]
@@ -75,13 +82,10 @@ def resolve_dataset_config(args):
 
 def load_model_from_checkpoint(checkpoint_path, device=None):
     """
-    Load checkpoint -> dựng lại DiGemo -> nạp trọng số -> eval().
+    Load checkpoint -> rebuild DiGemo -> load weights -> eval().
 
-    Trả về:
-        model        : DiGemo đã ở chế độ eval, trên đúng device.
-        args         : argparse.Namespace lưu trong checkpoint.
-        embedding_dims, n_classes, n_speakers
-        device       : torch.device đang dùng.
+    Returns:
+        model, args, embedding_dims, n_classes, n_speakers, device
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -89,12 +93,12 @@ def load_model_from_checkpoint(checkpoint_path, device=None):
         device = torch.device(device)
 
     if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f"Không tìm thấy checkpoint: {checkpoint_path}")
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     checkpoint = _safe_torch_load(checkpoint_path, map_location=device)
     args = checkpoint["args"]
 
-    # Đồng bộ cờ no_cuda với device thực tế để tránh lỗi .cuda() bên trong model.
+    # Keep no_cuda in sync with the real device to avoid internal .cuda() errors.
     args.no_cuda = (device.type == "cpu")
 
     embedding_dims, n_classes, n_speakers = resolve_dataset_config(args)
@@ -109,12 +113,8 @@ def load_model_from_checkpoint(checkpoint_path, device=None):
 
 def build_dummy_inputs(embedding_dims, n_speakers, seq_len=50, batch_size=1, device="cpu"):
     """
-    Tạo input giả đúng định dạng forward của DiGemo:
+    Build dummy inputs matching DiGemo.forward:
         forward(feature_t, feature_v, feature_a, umask, qmask, dia_lengths)
-        - feature_*: (L, B, D)
-        - umask    : (L, B)
-        - qmask    : (L, B, n_speakers)
-        - dia_lengths: list[int] độ dài mỗi hội thoại trong batch
     """
     device = torch.device(device)
     t_feat = torch.randn(seq_len, batch_size, embedding_dims[0], device=device)
@@ -124,7 +124,7 @@ def build_dummy_inputs(embedding_dims, n_speakers, seq_len=50, batch_size=1, dev
     umask = torch.ones(seq_len, batch_size, device=device)
 
     qmask = torch.zeros(seq_len, batch_size, n_speakers, device=device)
-    qmask[:, :, 0] = 1.0  # gán toàn bộ là speaker 0
+    qmask[:, :, 0] = 1.0
 
     dia_lengths = [seq_len] * batch_size
 
@@ -132,23 +132,17 @@ def build_dummy_inputs(embedding_dims, n_speakers, seq_len=50, batch_size=1, dev
 
 
 # ===========================================================================
-# 2. CÁC HÀM ĐO COMPLEXITY
+# 2. COMPLEXITY MEASUREMENT
 # ===========================================================================
 def count_parameters(model):
-    """Đếm tổng số tham số và số tham số trainable."""
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return total, trainable
 
 
 def compute_flops_params(model, inputs):
-    """
-    Dùng thop.profile để ước lượng FLOPs và params.
-    Lưu ý: thop có thể không đếm được một số op của graph conv -> con số FLOPs
-    mang tính tham khảo. Trả về (flops, params) hoặc (None, None) nếu thiếu thop.
-    """
     if not _HAS_THOP:
-        print("[!] Chưa cài 'thop' (pip install thop) -> bỏ qua FLOPs.")
+        print("[!] 'thop' not installed (pip install thop) -> skipping FLOPs.")
         return None, None
     with torch.no_grad():
         flops, params = profile(model, inputs=inputs, verbose=False)
@@ -157,14 +151,9 @@ def compute_flops_params(model, inputs):
 
 @torch.no_grad()
 def measure_inference_time(model, inputs, warmup=20, runs=100, device="cpu"):
-    """
-    Đo thời gian inference trung bình cho 1 forward pass.
-    Trả về dict: mean_ms, std_ms, min_ms, max_ms, fps.
-    """
     device = torch.device(device)
     is_cuda = device.type == "cuda"
 
-    # Warmup
     for _ in range(warmup):
         model(*inputs)
     if is_cuda:
@@ -198,10 +187,6 @@ def measure_inference_time(model, inputs, warmup=20, runs=100, device="cpu"):
 
 @torch.no_grad()
 def measure_peak_memory(model, inputs, device="cpu"):
-    """
-    Đo peak GPU memory cho 1 forward pass (MB).
-    Chỉ có ý nghĩa trên CUDA; trên CPU trả về None.
-    """
     device = torch.device(device)
     if device.type != "cuda":
         return None
@@ -220,29 +205,16 @@ def measure_peak_memory(model, inputs, device="cpu"):
 
 def calculate_complexity(checkpoint_path, seq_len=50, batch_size=1,
                          warmup=20, runs=100, device=None, verbose=True):
-    """
-    NHIỆM VỤ CHÍNH: tính complexity của model từ checkpoint.
-    Bao gồm: params, GFLOPs, inference time, peak memory.
-
-    Trả về dict kết quả để có thể tái sử dụng/log.
-    """
+    """TASK 1: params, GFLOPs, inference time, peak memory."""
     model, args, embedding_dims, n_classes, n_speakers, device = \
         load_model_from_checkpoint(checkpoint_path, device)
 
     inputs = build_dummy_inputs(embedding_dims, n_speakers,
-                                seq_len=seq_len, batch_size=batch_size,
-                                device=device)
+                                seq_len=seq_len, batch_size=batch_size, device=device)
 
-    # --- Params ---
     total_params, trainable_params = count_parameters(model)
-
-    # --- FLOPs (thop) ---
-    flops, thop_params = compute_flops_params(model, inputs)
-
-    # --- Inference time ---
+    flops, _ = compute_flops_params(model, inputs)
     timing = measure_inference_time(model, inputs, warmup=warmup, runs=runs, device=device)
-
-    # --- Peak memory ---
     mem = measure_peak_memory(model, inputs, device=device)
 
     result = {
@@ -261,7 +233,6 @@ def calculate_complexity(checkpoint_path, seq_len=50, batch_size=1,
 
     if verbose:
         _print_report(result)
-
     return result
 
 
@@ -279,7 +250,7 @@ def _print_report(r):
     if r["gflops"] is not None:
         print(f" FLOPs              : {r['gflops']:.3f} GFLOPs")
     else:
-        print(f" FLOPs              : N/A (cài 'thop' để tính)")
+        print(f" FLOPs              : N/A (install 'thop' to compute)")
     t = r["timing"]
     print(f" Inference time     : {t['mean_ms']:.3f} ± {t['std_ms']:.3f} ms "
           f"(min {t['min_ms']:.3f} / max {t['max_ms']:.3f})")
@@ -289,35 +260,24 @@ def _print_report(r):
         print(f" Peak memory (alloc): {m['peak_allocated_mb']:.2f} MB")
         print(f" Peak memory (resv) : {m['peak_reserved_mb']:.2f} MB")
     else:
-        print(f" Peak memory        : N/A (chỉ đo được trên CUDA)")
+        print(f" Peak memory        : N/A (only measurable on CUDA)")
     print("=" * 60)
 
 
 # ===========================================================================
-# 3. PREDICT (tối giản) - chạy forward và trả về nhãn dự đoán
+# 3. PREDICT - run a forward pass and return predicted labels
 # ===========================================================================
 @torch.no_grad()
 def predict(checkpoint_path, inputs=None, seq_len=50, batch_size=1, device=None):
-    """
-    Load checkpoint rồi chạy dự đoán.
-    - Nếu 'inputs' = None -> dùng dummy input (chủ yếu để smoke-test pipeline).
-    - inputs phải đúng định dạng: (feature_t, feature_v, feature_a, umask, qmask, dia_lengths)
-
-    Trả về (pred_labels, fused_logit) với pred_labels là tensor nhãn cảm xúc/utterance.
-    """
+    """Load checkpoint and run prediction. inputs=None -> use dummy inputs."""
     model, args, embedding_dims, n_classes, n_speakers, device = \
         load_model_from_checkpoint(checkpoint_path, device)
 
     if inputs is None:
         inputs = build_dummy_inputs(embedding_dims, n_speakers,
-                                    seq_len=seq_len, batch_size=batch_size,
-                                    device=device)
+                                    seq_len=seq_len, batch_size=batch_size, device=device)
     else:
-        # Đưa các tensor về đúng device
-        moved = []
-        for x in inputs:
-            moved.append(x.to(device) if torch.is_tensor(x) else x)
-        inputs = tuple(moved)
+        inputs = tuple(x.to(device) if torch.is_tensor(x) else x for x in inputs)
 
     fused_logit, t_logit, v_logit, a_logit, fused_feature = model(*inputs)
     pred_labels = torch.argmax(fused_logit, dim=-1)
@@ -325,20 +285,216 @@ def predict(checkpoint_path, inputs=None, seq_len=50, batch_size=1, device=None)
 
 
 # ===========================================================================
+# 4. CONFUSION MATRIX - evaluate the test set and plot
+# ===========================================================================
+def _build_test_loader(args, feature_path=None, batch_size=16):
+    """Build the test DataLoader based on args.dataset."""
+    from torch.utils.data import DataLoader
+    from dataloader import IEMOCAPDataset_BERT, MELDDataset_BERT
+
+    dataset = args.dataset
+    cfg = DATASET_CONFIG.get(dataset, {})
+    path = feature_path or cfg.get("default_feature")
+
+    if path is None:
+        raise ValueError(
+            f"No default feature path for dataset '{dataset}'. "
+            f"Please pass --feature_path."
+        )
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Feature file not found: {path}")
+
+    if dataset == "IEMOCAP":
+        testset = IEMOCAPDataset_BERT(path, train=False)
+    elif dataset == "MELD":
+        testset = MELDDataset_BERT(path, train=False)
+    else:
+        raise ValueError(
+            f"Confusion matrix currently supports IEMOCAP and MELD only "
+            f"(current dataset: '{dataset}')."
+        )
+
+    loader = DataLoader(
+        testset,
+        batch_size=batch_size,
+        collate_fn=testset.collate_fn,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=False,
+    )
+    return loader
+
+
+@torch.no_grad()
+def evaluate_testset(model, dataloader, device):
+    """
+    Run the model over the whole test set and collect true/predicted labels.
+    The dia_lengths / label handling mirrors trainer.train_or_eval_model (eval mode).
+    Returns (labels, preds) as 1-D numpy arrays at the utterance level.
+    """
+    import numpy as np
+    import torch.nn.functional as F
+
+    model.eval()
+    all_preds, all_labels = [], []
+
+    for data in dataloader:
+        # data = [textf, visuf, acouf, qmask, umask, label_emotion, vids]
+        textf, visuf, acouf, qmask, umask, label_emotion = \
+            [d.to(device) for d in data[:-1]]
+
+        dia_lengths, label_emotions = [], []
+        for j in range(umask.size(1)):
+            length = (umask[:, j] == 1).nonzero().tolist()[-1][0] + 1
+            dia_lengths.append(length)
+            label_emotions.append(label_emotion[:length, j])
+        label_emo = torch.cat(label_emotions)
+
+        fused_logit, t_logit, v_logit, a_logit, fused_feature = \
+            model(textf, visuf, acouf, umask, qmask, dia_lengths)
+
+        fused_prob = F.log_softmax(fused_logit, -1)
+        preds = torch.argmax(fused_prob, 1)
+
+        all_preds.append(preds.cpu().numpy())
+        all_labels.append(label_emo.cpu().numpy())
+
+    labels = np.concatenate(all_labels)
+    preds = np.concatenate(all_preds)
+    return labels, preds
+
+
+# Short class labels + x-axis suffix per dataset (matching the reference figure).
+CM_LABELS = {
+    "IEMOCAP": (["Hap", "Sad", "Neu", "Ang", "Exc", "Fru"], "IEMOCAP"),
+    "MELD":    (["Neu", "Sur", "Fea", "Sad", "Joy", "Dis", "Ang"], "MELD"),
+}
+
+
+def plot_confusion_matrix_styled(matrix, dataset, file_name,
+                                 save_dir="results/confusion_matrix",
+                                 img_format="pdf"):
+    """
+    Plot the confusion matrix in the reference style:
+        - GnBu colormap (white -> green -> blue)
+        - color encodes the row-normalized fraction (0..1)
+        - cells display PERCENTAGES (2 decimal places)
+        - short labels, horizontal x-ticks, no title, no grid lines, serif font
+
+    matrix: raw count matrix, shape (C, C).
+    Returns the saved file path.
+    """
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")  # no display needed
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    n = matrix.shape[0]
+    label_names, suffix = CM_LABELS.get(
+        dataset, ([str(i) for i in range(n)], dataset)
+    )
+
+    matrix = np.asarray(matrix, dtype=float)
+    row_sums = matrix.sum(axis=1, keepdims=True)
+    frac = matrix / (row_sums + 1e-9)   # 0..1  -> used for COLOR
+    annot = frac * 100.0                # %     -> used for TEXT
+
+    # Serif font like the reference (falls back if Times New Roman is missing).
+    try:
+        plt.rcParams["font.family"] = "serif"
+        plt.rcParams["font.serif"] = ["Times New Roman", "DejaVu Serif"]
+    except Exception:
+        pass
+
+    plt.figure(figsize=(8, 7))
+    ax = sns.heatmap(
+        frac,                 # color by 0..1 fraction
+        annot=annot,          # but print percentages
+        fmt=".2f",
+        cmap="GnBu",
+        cbar=True,
+        vmin=0.0,
+        linewidths=0,
+        xticklabels=label_names,
+        yticklabels=label_names,
+        square=True,
+        annot_kws={"fontsize": 11},
+    )
+    ax.set_xlabel(f"Predict Label ({suffix})", fontsize=13)
+    ax.set_ylabel("True Label", fontsize=13)
+    plt.xticks(rotation=0)
+    plt.yticks(rotation=0)
+    plt.tight_layout()
+
+    save_path = os.path.join(save_dir, f"{file_name}.{img_format}")
+    plt.savefig(save_path, format=img_format, dpi=300, bbox_inches="tight")
+    plt.close()
+    return save_path
+
+
+def plot_confusion_from_checkpoint(checkpoint_path, feature_path=None, batch_size=16,
+                                   device=None, file_name=None,
+                                   save_dir="results/confusion_matrix",
+                                   img_format="pdf", verbose=True):
+    """
+    TASK 2: load checkpoint -> evaluate test set -> plot confusion matrix.
+
+    Returns (confusion_matrix, labels, preds).
+    File saved at: {save_dir}/{file_name}.{img_format}
+    """
+    from sklearn.metrics import confusion_matrix, classification_report
+
+    model, args, embedding_dims, n_classes, n_speakers, device = \
+        load_model_from_checkpoint(checkpoint_path, device)
+
+    loader = _build_test_loader(args, feature_path=feature_path, batch_size=batch_size)
+    labels, preds = evaluate_testset(model, loader, device)
+
+    cm = confusion_matrix(labels, preds, labels=list(range(n_classes)))
+
+    if verbose:
+        print(classification_report(labels, preds, digits=4, zero_division=0))
+        print("Confusion matrix (counts):")
+        print(cm)
+
+    if file_name is None:
+        seed = getattr(args, "seed", "x")
+        file_name = f"conf_{args.dataset}_{seed}"
+
+    out_path = plot_confusion_matrix_styled(
+        cm, args.dataset, file_name, save_dir=save_dir, img_format=img_format
+    )
+    print(f"[+] Saved confusion matrix: {out_path}")
+
+    return cm, labels, preds
+
+
+# ===========================================================================
 # CLI
 # ===========================================================================
 def parse_args():
-    p = argparse.ArgumentParser(description="DiGemo complexity & predict utility")
+    p = argparse.ArgumentParser(description="DiGemo predict / complexity / confusion-matrix utility")
     p.add_argument("--checkpoint", type=str,
-                   default="./checkpoints/best_model_IEMOCAP_9161.pth",
-                   help="Đường dẫn tới file checkpoint .pth")
-    p.add_argument("--seq_len", type=int, default=50, help="Độ dài chuỗi giả lập")
-    p.add_argument("--batch_size", type=int, default=1, help="Batch size giả lập")
-    p.add_argument("--warmup", type=int, default=20, help="Số lần warmup khi đo thời gian")
-    p.add_argument("--runs", type=int, default=100, help="Số lần đo thời gian inference")
-    p.add_argument("--cpu", action="store_true", help="Ép chạy trên CPU")
-    p.add_argument("--task", choices=["complexity", "predict"], default="complexity",
-                   help="Nhiệm vụ cần chạy")
+                   default="./checkpoints/best_model_IEMOCAP_260.pth",
+                   help="Path to the checkpoint .pth file")
+    p.add_argument("--task", choices=["complexity", "predict", "confusion"],
+                   default="complexity", help="Task to run")
+    p.add_argument("--seq_len", type=int, default=50, help="Dummy sequence length (complexity/predict)")
+    p.add_argument("--batch_size", type=int, default=1, help="Batch size")
+    p.add_argument("--warmup", type=int, default=20, help="Warmup iterations for timing")
+    p.add_argument("--runs", type=int, default=100, help="Measured iterations for inference timing")
+    p.add_argument("--feature_path", type=str, default=None,
+                   help="Path to the test feature .pkl (task=confusion)")
+    p.add_argument("--save_dir", type=str, default="results/confusion_matrix",
+                   help="Directory to save the confusion matrix")
+    p.add_argument("--file_name", type=str, default=None,
+                   help="Confusion matrix file name (default conf_{dataset}_{seed})")
+    p.add_argument("--img_format", choices=["pdf", "png"], default="pdf",
+                   help="Confusion matrix image format")
+    p.add_argument("--cpu", action="store_true", help="Force running on CPU")
     return p.parse_args()
 
 
@@ -355,6 +511,7 @@ if __name__ == "__main__":
             runs=cli.runs,
             device=dev,
         )
+
     elif cli.task == "predict":
         preds, logits = predict(
             cli.checkpoint,
@@ -364,3 +521,16 @@ if __name__ == "__main__":
         )
         print(f"Predicted labels shape: {tuple(preds.shape)}")
         print(f"Predicted labels: {preds.cpu().tolist()}")
+
+    elif cli.task == "confusion":
+        # confusion matrix should run with batch_size > 1 for speed
+        bs = cli.batch_size if cli.batch_size > 1 else 16
+        plot_confusion_from_checkpoint(
+            cli.checkpoint,
+            feature_path=cli.feature_path,
+            batch_size=bs,
+            device=dev,
+            file_name=cli.file_name,
+            save_dir=cli.save_dir,
+            img_format=cli.img_format,
+        )
