@@ -104,3 +104,62 @@ class MELDDataset_BERT(Dataset):
         dat = pd.DataFrame(data)
         return [(pad_sequence(dat[i]) if i < 6 else dat[i].tolist()) for i in dat]
 
+
+class CMUMOSEIDataset7(Dataset):
+    def __init__(self, path, train=True):
+        (
+            self.videoIDs,
+            self.videoSpeakers,
+            self.videoLabels,
+            self.videoText,
+            self.videoAudio,
+            self.videoVisual,
+            self.videoSentence,
+            self.trainVid,
+            self.testVid,
+        ) = pickle.load(open(path, "rb"), encoding="latin1")
+        self.keys = self.trainVid if train else self.testVid
+        self.len = len(self.keys)
+
+        # CMU sentiment score (continuous, [-3, 3]) -> 7 emotion bins
+        labels_emotion = {}
+        for item in self.videoLabels:
+            array = []
+            for a in self.videoLabels[item]:
+                if a < -2:
+                    array.append(0)
+                elif -2 <= a < -1:
+                    array.append(1)
+                elif -1 <= a < 0:
+                    array.append(2)
+                elif a == 0:
+                    array.append(3)
+                elif 0 < a <= 1:
+                    array.append(4)
+                elif 1 < a <= 2:
+                    array.append(5)
+                else:  # a > 2
+                    array.append(6)
+            labels_emotion[item] = array
+        self.labels_emotion = labels_emotion
+
+    def __getitem__(self, index):
+        vid = self.keys[index]
+        return (
+            torch.FloatTensor(np.array(self.videoText[vid])),
+            torch.FloatTensor(np.array(self.videoVisual[vid])),
+            torch.FloatTensor(np.array(self.videoAudio[vid])),
+            torch.FloatTensor(
+                [[1, 0] if x == "M" else [0, 1] for x in np.array(self.videoSpeakers[vid])]
+            ),
+            torch.FloatTensor([1] * len(np.array(self.labels_emotion[vid]))),
+            torch.LongTensor(np.array(self.labels_emotion[vid])),
+            vid,
+        )
+
+    def __len__(self):
+        return self.len
+
+    def collate_fn(self, data):
+        dat = pd.DataFrame(data)
+        return [(pad_sequence(dat[i]) if i < 6 else dat[i].tolist()) for i in dat]

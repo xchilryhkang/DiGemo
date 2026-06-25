@@ -18,6 +18,7 @@ from trainer import train_or_eval_model, seed_everything
 from dataloader import (
     IEMOCAPDataset_BERT,
     MELDDataset_BERT,
+    CMUMOSEIDataset7
 )
 from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
@@ -85,6 +86,7 @@ os.environ["WORLD_SIZE"] = str(world_size)
 
 MELD_path = "./features/meld_multi_features.pkl"
 IEMOCAP_path = "./features/iemocap_multi_features.pkl"
+CMUMOSEI7_path = "./features/cmumosei7_multi_features.pkl"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -232,6 +234,16 @@ def main(local_rank, seeds):
                 pin_memory=False
             )
         
+        elif args.dataset == "CMUMOSEI7":
+            train_loader, valid_loader, test_loader = get_data_loaders(
+                path=CMUMOSEI7_path,
+                dataset_class=CMUMOSEIDataset7,
+                valid_ratio=0.1,
+                batch_size=args.batch_size,
+                num_workers=0,
+                pin_memory=False
+            )
+
         else:
             print("There is no such dataset")
 
@@ -246,6 +258,8 @@ def main(local_rank, seeds):
                 trainset = MELDDataset_BERT(MELD_path)
             elif args.dataset == "IEMOCAP":
                 trainset = IEMOCAPDataset_BERT(IEMOCAP_path)
+            elif args.dataset == "CMUMOSEI7":
+                trainset = CMUMOSEIDataset7(CMUMOSEI7_path)
 
             setup_samplers(trainset, valid_ratio=0.1, epoch=epoch)
 
