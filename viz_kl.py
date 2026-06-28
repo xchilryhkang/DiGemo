@@ -1,22 +1,4 @@
-"""
-viz_kl.py  —  Standalone teacher-student KL visualization for DiGemo.
 
-Đặt file này CÙNG THƯ MỤC với run.py, trainer.py, model.py, ... và chạy:
-
-    python viz_kl.py --dataset IEMOCAP --epochs 200 --loss_type distil \
-        --lr 2e-5 --batch_size 16 --hidden_dim 512 --win 17 17 \
-        --heter_n_layers 5 5 5 --dropout_1 0.05 --dropout_2 0.2 \
-        --gammas 1.0 0.4 1.0 --num_heads 16 --temp 3.0 \
-        --data_path /path/to/iemocap_feature.pkl
-
-KHÔNG sửa bất kỳ file gốc nào. Script tự huấn luyện DiGemo và, sau MỖI epoch,
-đo lại KL(teacher || student) cho từng nhánh t/v/a trên train set (no_grad),
-đúng bằng công thức self-distillation trong trainer.py. Cuối cùng vẽ PDF.
-
-Lưu ý: dùng lại đúng pipeline trong run.py (get_data_loaders, DiGemo,
-nn.NLLLoss, nn.KLDivLoss). Nếu tên file feature / args của bạn khác,
-chỉ cần chỉnh phần ARG bên dưới — vẫn không động vào repo.
-"""
 import argparse, os, pickle
 import numpy as np
 import torch
@@ -64,8 +46,7 @@ def build_args():
 
 @torch.no_grad()
 def measure_kl_per_branch(model, loader, modals, temp, cuda):
-    """Do KL(teacher||student) trung binh cho tung nhanh tren toan bo loader.
-    Dung dung phep tinh nhu trainer.py (softmax teacher / log_softmax student)."""
+
     model.eval()
     kl_fn = nn.KLDivLoss(reduction="batchmean")
     tot = {"t": 0.0, "v": 0.0, "a": 0.0}
@@ -97,7 +78,6 @@ def main():
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     cuda = (not args.no_cuda) and torch.cuda.is_available()
 
-    # --- embedding dims & classes: y het run.py ---
     ds = args.dataset.upper()
     if ds.startswith("IEMOCAP") and "4" not in ds:
         embedding_dims, n_classes = [1024, 342, 1582], 6
@@ -115,9 +95,8 @@ def main():
     loss_kl = nn.KLDivLoss(reduction="batchmean")
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.l2)
 
-    # dataloader: dung get_data_loaders cua run.py
     with open(args.data_path, "rb") as f:
-        _ = f  # chi de chac chan file ton tai; get_data_loaders tu doc
+        _ = f 
     train_loader, valid_loader, test_loader = get_data_loaders(
         args.data_path, ds, args.batch_size, args.valid_ratio, 0, False
     )
