@@ -15,7 +15,7 @@
 ## Overall architecture
 
 <p align="center">
-  <img src="figs/architecture.jpg" width="100%" alt="DiGemo architecture">
+  <img src="figs/architecture.svg" width="100%" alt="DiGemo architecture">
 </p>
 
 ## Install
